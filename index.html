@@ -23,6 +23,7 @@ button{cursor:pointer}button:active{transform:scale(.98)}
 .opt.right{border-color:var(--ok);background:#173627;color:#c9f2d9}
 .opt.wrong{border-color:var(--bad);background:#3a1c1c;color:#f4c1be}
 .opt.sel{border-color:var(--acc)}
+.card.judged button.opt{pointer-events:none}
 .stat{color:var(--dim);font-size:13px;display:flex;justify-content:space-between;margin-top:10px}
 .bar{height:5px;background:#232936;border-radius:3px;margin-top:8px;overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--acc);width:0;transition:width .25s}
@@ -66,6 +67,7 @@ function start(bank, mode){
     const cnt = q => (((state.badTimes||{})[q.b]||{})[q.no]) || 0;
     qs.sort((a,b) => cnt(b) - cnt(a));  // 错得多的排前面
   }
+  if (mode === "study") { renderStudyAll(qs, bank); return; }
   if (mode === "rand") shuffle(qs);
   state.resume = state.resume || {};
   S = {bank, mode, qs, i: mode === "rand" ? 0 : ((state.resume[bank] || 0) % qs.length), right:0, wrong:0};
@@ -116,20 +118,7 @@ function renderQ(){
     <div class="bar"><i style="width:${(S.i/S.qs.length*100)|0}%"></i></div>
     <button class="next hidden" id="nx">下一题 →</button>
   </div>`;
-  let sel = new Set();
-  // study (背题) mode: answers pre-highlighted, any tap advances, nothing recorded
-  if (S.mode === "study") {
-    app.querySelectorAll(".opt").forEach(b => {
-      const k = b.dataset.k || "";
-      if (k && ansStr.includes(k)) b.classList.add("right");
-      b.onclick = advance;
-    });
-    document.getElementById("nx").classList.remove("hidden");
-    document.getElementById("nx").onclick = advance;
-    document.getElementById("fb").innerHTML = `<span class="muted">📖 背题模式 · 绿色为正确答案，点击任意选项继续</span>`;
-    document.getElementById("posn").textContent = "";
-    return;
-  }
+  let sel = new Set(), answered = false;
   app.querySelectorAll("button.opt").forEach(b => b.onclick = () => {
     if (b.dataset.multi === "true") {
       if (sel.has(b.dataset.k)) { sel.delete(b.dataset.k); b.classList.remove("sel"); }
@@ -141,7 +130,6 @@ function renderQ(){
   });
   // keyboard 1-4 for desktop
   document.onkeydown = e => {
-    if (S.mode === "study"){ if (e.key === "Enter") document.getElementById("nx").click(); return; }
     const n = parseInt(e.key);
     if (S && letters && n >= 1 && n <= letters.length){ sel.clear(); sel.add(letters[n-1]); judge(sel); }
     if (S && e.key === "Enter" && !EL("nx").classList.contains("hidden")) EL("nx").click();
@@ -154,8 +142,12 @@ function renderQ(){
     app.querySelector(".tfb") || app.querySelector(".card").insertBefore(s, app.querySelector(".stat"));
   }
   function judge(sels){
+    if (answered) return;          // 防连点/双击二次判分（会漏题）
+    if (sels && !sels.size) return;
+    answered = true;
     const picked = sels ? [...sels].sort().join("") : "";
     const ok = picked === ansStr;
+    app.querySelector(".card").classList.add("judged");
     app.querySelectorAll(".opt").forEach(b => {
       const k = b.dataset.k || "";
       const isAns = ansStr.includes(k);
@@ -186,24 +178,29 @@ function renderQ(){
     if (ok) setTimeout(() => { if (nx.isConnected) nx.click(); }, 900);  // ponytail: fixed 0.9s, add toggle if too fast
     if (q.type === "multi" && app.querySelector(".next")) app.querySelector(".next").remove();
   }
-  function advance(){
-    S.i++;
-    state.resume[S.bank] = S.i;
-    state.pos[q.b] = (state.pos[q.b] || 0) + 1;
-    save();
-    S.i >= S.qs.length ? renderEnd() : renderQ();
-  }
+}
+function renderStudyAll(qs, bank){
+  window.start = start;
+  const label = bank === "__all__" ? `全部题库 ${qs.length} 题` : bank === "__wrong__" ? `错题本 ${qs.length} 题` : `${bank} ${qs.length} 题`;
+  const rows = qs.map(q => {
+    const ansStr = (q.answer || []).join("");
+    const tag = q.type==="tf"?' <span class="tag">判断</span>':(q.type==="multi"?' <span class="tag">多选</span>':"");
+    const opts = q.type === "tf"
+      ? `<div class="tfb"><button class="opt ${ansStr.includes("T")?"right":""}"><span class="key">T</span>✔️ 正确</button><button class="opt ${ansStr.includes("F")?"right":""}"><span class="key">F</span>✖️ 错误</button></div>`
+      : q.options.map((o,k)=>`<button class="opt ${ansStr.includes("ABCD"[k])?"right":""}"><span class="key">${"ABCD"[k]}</span>${o}</button>`).join("");
+    return `<div class="card"><div>${q.b} · ${q.no}. ${q.stem}${tag}</div>${opts}</div>`;
+  }).join("");
+  app.innerHTML = `<h1><button class="home" onclick="renderHome()">⌂ 主页</button>📖 背题 · ${label}</h1><div class="muted">绿色 = 正确答案</div>${rows}`;
 }
 function fmtAns(ans, q){
   if (q.type === "tf") return ans === "T" ? "✔️ 正确" : "✖️ 错误";
   return ans.split("").map(a => `${a}. ${q.options["ABCD".indexOf(a)]||""}`).join("，");
 }
 function renderEnd(){
-  const pass = S.mode === "study" ? 100 : Math.round(S.right / S.qs.length * 100);
-  const detail = S.mode === "study" ? "背题完成" : `答对 ${S.right} / ${S.qs.length}${S.wrong?`，错题已收进错题本`:``}`;
+  const pass = Math.round(S.right / S.qs.length * 100);
   app.innerHTML = `
   <div class="done"><b style="color:${pass>=80?"var(--ok)":"var(--bad)"}">${pass}%</b>
-  <div class="muted">${detail}</div></div>
+  <div class="muted">答对 ${S.right} / ${S.qs.length}${S.wrong?`，错题已收进错题本`:``}</div></div>
   <div class="row" style="justify-content:center;margin-top:14px">
     <button onclick="start('${S.bank}','${S.mode}')">再来一遍</button>
     <button onclick="start('__wrong__','seq')">错题重刷</button>
